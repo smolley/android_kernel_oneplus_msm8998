@@ -34,6 +34,7 @@
 #include "mdss_debug.h"
 #include "mdss_dsi_phy.h"
 #include "mdss_dba_utils.h"
+#include "mdss_livedisplay.h"
 
 #define CMDLINE_DSI_CTL_NUM_STRING_LEN 2
 
@@ -964,7 +965,7 @@ static int mdss_dsi_cmd_flush(struct file *file, fl_owner_t id)
 	while (len >= sizeof(*dchdr)) {
 		dchdr = (struct dsi_ctrl_hdr *)bp;
 		dchdr->dlen = ntohs(dchdr->dlen);
-		if (dchdr->dlen > len) {
+		if (dchdr->dlen > len || dchdr->dlen < 0) {
 			pr_err("%s: dtsi cmd=%x error, len=%d\n",
 				__func__, dchdr->dtype, dchdr->dlen);
 			kfree(buf);
@@ -2842,6 +2843,9 @@ static int mdss_dsi_event_handler(struct mdss_panel_data *pdata,
 	case MDSS_EVENT_AVR_MODE:
 		mdss_dsi_avr_config(ctrl_pdata, (int)(unsigned long) arg);
 		break;
+	case MDSS_EVENT_UPDATE_LIVEDISPLAY:
+		rc = mdss_livedisplay_update(ctrl_pdata, (int)(unsigned long) arg);
+		break;
 	default:
 		pr_debug("%s: unhandled event=%d\n", __func__, event);
 		break;
@@ -3252,21 +3256,6 @@ end:
 	return rc;
 }
 
-static void mdss_dsi_ctrl_validate_lane_swap_config(
-	struct mdss_dsi_ctrl_pdata *ctrl)
-{
-	struct mipi_panel_info *mipi = &ctrl->panel_data.panel_info.mipi;
-
-	if (!mipi->data_lane0)
-		ctrl->lane_map[DSI_LOGICAL_LANE_0] = DSI_PHYSICAL_LANE_INVALID;
-	if (!mipi->data_lane1)
-		ctrl->lane_map[DSI_LOGICAL_LANE_1] = DSI_PHYSICAL_LANE_INVALID;
-	if (!mipi->data_lane2)
-		ctrl->lane_map[DSI_LOGICAL_LANE_2] = DSI_PHYSICAL_LANE_INVALID;
-	if (!mipi->data_lane3)
-		ctrl->lane_map[DSI_LOGICAL_LANE_3] = DSI_PHYSICAL_LANE_INVALID;
-}
-
 static int mdss_dsi_ctrl_validate_config(struct mdss_dsi_ctrl_pdata *ctrl)
 {
 	int rc = 0;
@@ -3275,8 +3264,6 @@ static int mdss_dsi_ctrl_validate_config(struct mdss_dsi_ctrl_pdata *ctrl)
 		rc = -EINVAL;
 		goto error;
 	}
-
-	mdss_dsi_ctrl_validate_lane_swap_config(ctrl);
 
 	/*
 	 * check to make sure that the byte interface clock is specified for

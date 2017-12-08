@@ -46,7 +46,8 @@
 
 static void *ffs_ipc_log;
 #define ffs_log(fmt, ...) do { \
-	ipc_log_string(ffs_ipc_log, "%s: " fmt,  __func__, \
+	if (ffs_ipc_log)	\
+		ipc_log_string(ffs_ipc_log, "%s: " fmt,  __func__, \
 			##__VA_ARGS__); \
 	pr_debug(fmt, ##__VA_ARGS__); \
 } while (0)
@@ -1610,10 +1611,6 @@ static int functionfs_init(void)
 	else
 		pr_err("failed registering file system (%d)\n", ret);
 
-	ffs_ipc_log = ipc_log_context_create(NUM_PAGES, "f_fs", 0);
-	if (IS_ERR_OR_NULL(ffs_ipc_log))
-		ffs_ipc_log =  NULL;
-
 	return ret;
 }
 
@@ -1623,13 +1620,7 @@ static void functionfs_cleanup(void)
 
 	pr_info("unloading\n");
 	unregister_filesystem(&ffs_fs_type);
-
-	if (ffs_ipc_log) {
-		ipc_log_context_destroy(ffs_ipc_log);
-		ffs_ipc_log = NULL;
-	}
 }
-
 
 /* ffs_data and ffs_function construction and destruction code **************/
 
@@ -1986,11 +1977,14 @@ static int ffs_func_eps_enable(struct ffs_function *func)
 	spin_lock_irqsave(&func->ffs->eps_lock, flags);
 	do {
 		struct usb_endpoint_descriptor *ds;
+		struct usb_ss_ep_comp_descriptor *comp_desc = NULL;
+		int needs_comp_desc = false;
 		int desc_idx;
 
-		if (ffs->gadget->speed == USB_SPEED_SUPER)
+		if (ffs->gadget->speed == USB_SPEED_SUPER) {
 			desc_idx = 2;
-		else if (ffs->gadget->speed == USB_SPEED_HIGH)
+			needs_comp_desc = true;
+		} else if (ffs->gadget->speed == USB_SPEED_HIGH)
 			desc_idx = 1;
 		else
 			desc_idx = 0;
@@ -2008,12 +2002,12 @@ static int ffs_func_eps_enable(struct ffs_function *func)
 		ep->ep->driver_data = ep;
 		ep->ep->desc = ds;
 
-		ret = config_ep_by_speed(func->gadget, &func->function, ep->ep);
-		if (ret) {
-			pr_err("%s(): config_ep_by_speed(%d) err for %s\n",
-					__func__, ret, ep->ep->name);
-			break;
-		}
+		comp_desc = (struct usb_ss_ep_comp_descriptor *)(ds +
+				USB_DT_ENDPOINT_SIZE);
+		ep->ep->maxburst = comp_desc->bMaxBurst + 1;
+
+		if (needs_comp_desc)
+			ep->ep->comp_desc = comp_desc;
 
 		ret = usb_ep_enable(ep->ep);
 		if (likely(!ret)) {
@@ -4055,5 +4049,28 @@ static char *ffs_prepare_buffer(const char __user *buf, size_t len)
 }
 
 DECLARE_USB_FUNCTION_INIT(ffs, ffs_alloc_inst, ffs_alloc);
+
+static int ffs_init(void)
+{
+	ffs_ipc_log = ipc_log_context_create(NUM_PAGES, "f_fs", 0);
+	if (IS_ERR_OR_NULL(ffs_ipc_log)) {
+		ffs_ipc_log =  NULL;
+		pr_err("%s: Create IPC log context failure\n",
+				__func__);
+	}
+
+	return 0;
+}
+module_init(ffs_init);
+
+static void __exit ffs_exit(void)
+{
+	if (ffs_ipc_log) {
+		ipc_log_context_destroy(ffs_ipc_log);
+		ffs_ipc_log = NULL;
+	}
+}
+module_exit(ffs_exit);
+
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Michal Nazarewicz");
